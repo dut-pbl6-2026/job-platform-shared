@@ -33,9 +33,9 @@ No `env` needed for this repo (library). For full stack `env` see `job-platform-
 ## Build
 
 ```bash
-dotnet build SharedKernel.sln --warnaserror
-dotnet format --verify-no-changes SharedKernel.sln
-dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts  # creates JobPlatform.SharedKernel.0.1.0.nupkg
+mise run build   # dotnet build --warnaserror
+mise run format  # dotnet format --verify-no-changes
+mise run pack    # dotnet pack -o ./artifacts
 ls artifacts/
 ```
 

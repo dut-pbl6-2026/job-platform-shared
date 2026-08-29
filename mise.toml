@@ -1,2 +1,11 @@
 [tools]
 dotnet = "10.0.100"
+
+[tasks.build]
+run = "dotnet build SharedKernel.sln --warnaserror"
+
+[tasks.format]
+run = "dotnet format --verify-no-changes SharedKernel.sln"
+
+[tasks.pack]
+run = "dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts"
