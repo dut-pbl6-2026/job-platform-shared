@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>JobPlatform.SharedKernel</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>dut-pbl6-2026</Authors>
+    <Company>dut-pbl6-2026</Company>
+    <Description>Shared kernel for Job Platform - Result, Entity, ValueObject, JWT constants</Description>
+    <RepositoryUrl>https://github.com/dut-pbl6-2026/job-platform-shared</RepositoryUrl>
+  </PropertyGroup>
+</Project>
