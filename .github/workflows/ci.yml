@@ -6,6 +6,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: '10.0.x' }
-      - run: dotnet build SharedKernel.sln
+        with: { dotnet-version: '10.0.100' }
+      - run: dotnet format --verify-no-changes
+      - run: dotnet build SharedKernel.sln --warnaserror
       - run: dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts
