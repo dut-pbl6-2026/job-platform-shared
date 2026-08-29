@@ -2,10 +2,17 @@
 dotnet = "10.0.100"
 
 [tasks.build]
+description = "Build solution"
 run = "dotnet build SharedKernel.sln --warnaserror"
 
 [tasks.format]
+description = "Check formatting"
 run = "dotnet format --verify-no-changes SharedKernel.sln"
 
 [tasks.pack]
+description = "Pack SharedKernel"
 run = "dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts"
+
+[tasks.verify]
+description = "Verify pack artifacts"
+run = 'ls -1 ./artifacts/*.nupkg 2>/dev/null | wc -l; echo " nupkg in artifacts (expected >=1)"'
