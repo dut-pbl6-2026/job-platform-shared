@@ -23,17 +23,19 @@ cd job-platform-shared
 ```bash
 mise trust
 mise install
-mise exec -- dotnet --version  # 10.0.100
+dotnet --version  # 10.0.100
 ```
+
+> Note: agent uses `mise exec -- dotnet ...` due to non-interactive shell without `mise activate`; humans just use `dotnet`.
 
 No `env` needed for this repo (library). For full stack `env` see `job-platform-infra/envs/.env.dev.example` + `scripts/sync-env.sh dev`.
 
 ## Build
 
 ```bash
-mise exec -- dotnet build SharedKernel.sln --warnaserror
-mise exec -- dotnet format --verify-no-changes SharedKernel.sln
-mise exec -- dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts  # creates JobPlatform.SharedKernel.0.1.0.nupkg
+dotnet build SharedKernel.sln --warnaserror
+dotnet format --verify-no-changes SharedKernel.sln
+dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts  # creates JobPlatform.SharedKernel.0.1.0.nupkg
 ls artifacts/
 ```
 
@@ -43,6 +45,8 @@ ls artifacts/
 ## Consume
 
 Published as `JobPlatform.SharedKernel 0.1.0` via `local-feed` + `nuget.config` in `job-platform-auth-svc` (`PackageReference` not `ProjectReference` per `master-plan.md:132`). For local dev `dotnet pack` then `cp artifacts/*.nupkg ../job-platform-auth-svc/local-feed/`.
+
+> Note: agent uses `mise exec -- dotnet ...`; humans use `dotnet` directly after `mise install`.
 
 ## Troubleshooting
 
