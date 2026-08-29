@@ -5,4 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "ci placeholder"
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.0.x' }
+      - run: dotnet build SharedKernel.sln
+      - run: dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts
