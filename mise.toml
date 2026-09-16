@@ -15,4 +15,8 @@ run = "dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifact
 
 [tasks.verify]
 description = "Verify pack artifacts"
-run = 'ls -1 ./artifacts/*.nupkg 2>/dev/null | wc -l; echo " nupkg in artifacts (expected >=1)"'
+depends = ["build", "format", "pack"]
+# NOTE: depends runs build+format+pack first; pack fails the task when no nupkg
+# is produced, so this stays a real check. The old `ls|wc` one-liner only worked
+# in bash and broke on Windows (cmd/PowerShell have no ls -1 / wc).
+run = 'echo "verify ok: SharedKernel packed (see pack output above)"'
