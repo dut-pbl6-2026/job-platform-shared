@@ -17,12 +17,12 @@ Agent uses `mise exec -- dotnet ...` / `mise exec -- infisical ...` due to non-i
 
 ## Scope
 
-`PBL6-11` shared library — `PackageId JobPlatform.SharedKernel 0.1.0` (`net10.0`) for all svcs+gateway. Owner all TMs. MUST infra dependency per `3.13`.
+`PBL6-11` shared library — `PackageId JobPlatform.SharedKernel 0.2.0` (`net10.0`) for all svcs+gateway. Owner all TMs. MUST infra dependency per `3.13`. `0.2.0` adds Kafka event contracts + plumbing (`PBL6-5`, `src/SharedKernel/{Events,Kafka}`); consumers on `0.1.0` bump `PackageReference` when they adopt events.
 
 ## Architecture (SRS 8.7 multirepo)
 
 - **Consumers:** `auth-svc` + `job-svc` + `search-svc` + `app-svc` + `profile-svc` + `notif-svc` + `gateway` via `PackageReference` only (never `ProjectReference` per `master-plan.md:132`), `nuget.config` `local-feed` in `auth-svc` for local dev.
-- **Contracts:** DDD building blocks only — no infra. Event schema dual-read for `job.created|updated|deleted|application.submitted|updated` (`8-system-architecture.md:8.5`).
+- **Contracts:** DDD building blocks + Kafka event contracts/plumbing (`PBL6-5`) — no other infra. Event schema dual-read for `job.created|updated|deleted|application.submitted|status_changed` (`8-system-architecture.md:8.5`): `Events/{JobEvents,ApplicationEvents,EventEnvelope}.cs` (payloads + envelope, no PII per `SEC-05`), `Kafka/{KafkaOptions,KafkaProducerService,KafkaConsumerService}.cs` (transport only; topic/group stay per-service).
 - **Versioning:** SemVer `0.1.0` (`<Version>` in `SharedKernel.csproj`), breaking change = major bump + `Pact` contract test block in service CI (`3-must-have-fr.md:3.13`), Dependabot + `repository_dispatch` propagation.
 
 ## DDD building blocks (2026 best practice, NFR `MAINT-01`)
@@ -41,14 +41,15 @@ JwtOptions      : SectionName="Jwt", Secret≥32, Issuer=Audience="job-platform"
 
 - `dotnet 10.0.100` `net10.0`, `dotnet build --warnaserror` + `dotnet format --verify-no-changes` (mise `build/format`), keep `ImplicitUsings` + `Nullable`.
 - Coverage `>70%` via consumers, `OpenAPI` via consumers, `Bump System.Security.Cryptography.Xml 10.0.11` for `NU1903`.
-- Keep `SharedKernel.csproj` minimal — no `EF`/`Npgsql`/`BCrypt`, no `appsettings.json`.
+- Keep `SharedKernel.csproj` minimal — no `EF`/`Npgsql`/`BCrypt`, no `appsettings.json`. Only allowed extra refs are the Kafka set (`Confluent.Kafka 2.*` + `Microsoft.Extensions.{Hosting,Logging,Options}.Abstractions 10.0.0` for the producer/consumer base).
+- Kafka rules for producers/consumers: partition key is mandatory (`JobId`/`ApplicationId`, plan `2.2.1`), payloads carry no PII (`SEC-05`), consumers commit offsets only after successful handling (at-least-once, handlers must be idempotent).
 
 ## Workflow
 
 ```bash
 mise trust && mise install
 mise run build && mise run format
-mise run pack   # → ./artifacts/JobPlatform.SharedKernel.0.1.0.nupkg
+mise run pack   # → ./artifacts/JobPlatform.SharedKernel.0.2.0.nupkg
 mise run verify # 1 nupkg
 cp artifacts/*.nupkg ../job-platform-auth-svc/local-feed/
 ```

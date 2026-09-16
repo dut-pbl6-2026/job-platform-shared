@@ -1,6 +1,6 @@
 # job-platform-shared
 
-.NET Class Library SharedKernel — **Vietnam Job Platform** (`pbl6`) under [`dut-pbl6-2026`](https://github.com/dut-pbl6-2026). `PackageId JobPlatform.SharedKernel 0.1.0`.
+.NET Class Library SharedKernel — **Vietnam Job Platform** (`pbl6`) under [`dut-pbl6-2026`](https://github.com/dut-pbl6-2026). `PackageId JobPlatform.SharedKernel 0.2.0`.
 
 ## Prerequisites
 
@@ -37,11 +37,15 @@ mise run verify  # check artifacts nupkg
 ```
 
 - `src/SharedKernel` `Result<T>` `Entity` `ValueObject` `JwtOptions`.
+- `src/SharedKernel/Events` `JobEvents` (`job.created|updated|deleted`) `ApplicationEvents` (`application.submitted|status_changed`) `EventEnvelope<T>` — no PII (`SEC-05`).
+- `src/SharedKernel/Kafka` `KafkaOptions` (bootstrap + SASL) `KafkaProducerService` (key-required produce, idempotent) `KafkaConsumerService` (BackgroundService base, manual commit, idle when unconfigured).
 - `GenerateDocumentationFile` true — XML docs required.
+
+Kafka rules: partition key is mandatory (`JobId` for `job-events`, `ApplicationId` for `application-events`); consumers are at-least-once — commit after handling, handlers must be idempotent.
 
 ## Consume
 
-`JobPlatform.SharedKernel 0.1.0` via `local-feed` + `nuget.config` in `job-platform-auth-svc` (`PackageReference` not `ProjectReference`). For local dev:
+`JobPlatform.SharedKernel 0.2.0` via `local-feed` + `nuget.config` in `job-platform-auth-svc` (`PackageReference` not `ProjectReference`). Services still on `0.1.0` keep working — bump to `0.2.0` only when adopting Kafka events (`PBL6-5`). For local dev:
 
 ```bash
 mise run pack
