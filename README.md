@@ -31,9 +31,10 @@ No `env` needed for this repo (library). For full stack `env` see `job-platform-
 
 ```bash
 mise run build   # dotnet build --warnaserror
+mise run test    # dotnet test (Events/Kafka suite)
 mise run format  # dotnet format --verify-no-changes
 mise run pack    # dotnet pack -o ./artifacts
-mise run verify  # check artifacts nupkg
+mise run verify  # build + test + format + pack
 ```
 
 - `src/SharedKernel` `Result<T>` `Entity` `ValueObject` `JwtOptions`.
@@ -41,7 +42,26 @@ mise run verify  # check artifacts nupkg
 - `src/SharedKernel/Kafka` `KafkaOptions` (bootstrap + SASL) `KafkaProducerService` (key-required produce, idempotent) `KafkaConsumerService` (BackgroundService base, manual commit, idle when unconfigured).
 - `GenerateDocumentationFile` true — XML docs required.
 
-Kafka rules: partition key is mandatory (`JobId` for `job-events`, `ApplicationId` for `application-events`); consumers are at-least-once — commit after handling, handlers must be idempotent.
+Kafka rules: partition key is mandatory (`JobId` for `job-events`, `ApplicationId` for `application-events`); wire JSON is camelCase via `KafkaJson.Options` (case-insensitive on read).
+
+Delivery contract (at-least-once): the consumer commits only after `Handled`/`Skip`; `Retry` (or throw) redelivers after 1s..30s backoff. Handlers must dedupe on `EventEnvelope.EventId` — e.g. unique `(application_id, event_type, status_snapshot)` in notif `email_logs`, ES `_id` = job id in search. Poison/unknown messages must return `Skip` (commit past them), never `Retry`.
+
+Config — dev (local broker, no auth), only bootstrap is set:
+
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+```
+
+Config — prod (SASL + TLS, fail-fast on half config). Username set without password, unknown protocol/mechanism, or missing CA file throws at startup:
+
+```bash
+KAFKA_BOOTSTRAP_SERVERS=broker:9092
+Kafka__SaslUsername=svc
+Kafka__SaslPassword=<secret>          # required with username
+Kafka__SecurityProtocol=SaslSsl       # auto when username set; explicit override ok
+Kafka__SaslMechanism=ScramSha256      # Plain (default) | ScramSha256 | ScramSha512
+Kafka__SslCaLocation=/certs/ca.crt    # optional; must exist when set
+```
 
 ## Consume
 

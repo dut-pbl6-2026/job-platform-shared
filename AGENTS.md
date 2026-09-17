@@ -40,7 +40,7 @@ JwtOptions      : SectionName="Jwt", Secret≥32, Issuer=Audience="job-platform"
 ## 2026 best practice (NFR `MAINT-02/03`)
 
 - `dotnet 10.0.100` `net10.0`, `dotnet build --warnaserror` + `dotnet format --verify-no-changes` (mise `build/format`), keep `ImplicitUsings` + `Nullable`.
-- Coverage `>70%` via consumers, `OpenAPI` via consumers, `Bump System.Security.Cryptography.Xml 10.0.11` for `NU1903`.
+- Coverage `>70%` via consumers, plus direct xUnit suite `tests/SharedKernel.Tests` for Events/Kafka (`mise run test`), `OpenAPI` via consumers, `Bump System.Security.Cryptography.Xml 10.0.11` for `NU1903`.
 - Keep `SharedKernel.csproj` minimal — no `EF`/`Npgsql`/`BCrypt`, no `appsettings.json`. Only allowed extra refs are the Kafka set (`Confluent.Kafka 2.*` + `Microsoft.Extensions.{Hosting,Logging,Options}.Abstractions 10.0.0` for the producer/consumer base).
 - Kafka rules for producers/consumers: partition key is mandatory (`JobId`/`ApplicationId`, plan `2.2.1`), payloads carry no PII (`SEC-05`), consumers commit offsets only after successful handling (at-least-once, handlers must be idempotent).
 
