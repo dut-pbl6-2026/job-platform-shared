@@ -83,6 +83,7 @@ public abstract class KafkaConsumerService : BackgroundService
             return;
         }
 
+        _options.Validate();
         var config = new ConsumerConfig
         {
             BootstrapServers = _options.BootstrapServers.Trim(),
@@ -91,7 +92,7 @@ public abstract class KafkaConsumerService : BackgroundService
             EnableAutoCommit = false,
             EnableAutoOffsetStore = false,
         };
-        ApplySasl(config, _options);
+        KafkaSecurity.Apply(config, _options);
 
         using var consumer = new ConsumerBuilder<string, string>(config).Build();
         consumer.Subscribe(Topic);
@@ -155,17 +156,4 @@ public abstract class KafkaConsumerService : BackgroundService
         }
     }
 
-    private static void ApplySasl(ClientConfig config, KafkaOptions kafka)
-    {
-        // Dev default: plaintext, no auth. Prod TODO (SEC-K2/K3): SASL/SCRAM + TLS via env.
-        if (string.IsNullOrWhiteSpace(kafka.SaslUsername))
-        {
-            return;
-        }
-
-        config.SecurityProtocol = SecurityProtocol.SaslPlaintext;
-        config.SaslMechanism = SaslMechanism.Plain;
-        config.SaslUsername = kafka.SaslUsername;
-        config.SaslPassword = kafka.SaslPassword;
-    }
 }

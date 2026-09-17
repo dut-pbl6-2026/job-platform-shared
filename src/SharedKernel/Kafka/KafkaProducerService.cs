@@ -49,6 +49,7 @@ public sealed class KafkaProducerService : IKafkaProducer
             throw new InvalidOperationException("Kafka not configured. Set KAFKA_BOOTSTRAP_SERVERS or Kafka:BootstrapServers.");
         }
 
+        kafka.Validate();
         var config = new ProducerConfig
         {
             BootstrapServers = kafka.BootstrapServers.Trim(),
@@ -56,7 +57,7 @@ public sealed class KafkaProducerService : IKafkaProducer
             EnableIdempotence = true,
             MessageTimeoutMs = 10_000,
         };
-        ApplySasl(config, kafka);
+        KafkaSecurity.Apply(config, kafka);
         _producer = new ProducerBuilder<string, string>(config).Build();
     }
 
@@ -89,17 +90,4 @@ public sealed class KafkaProducerService : IKafkaProducer
         _producer.Dispose();
     }
 
-    private static void ApplySasl(ClientConfig config, KafkaOptions kafka)
-    {
-        // Dev default: plaintext, no auth. Prod TODO (SEC-K2/K3): SASL/SCRAM + TLS via env.
-        if (string.IsNullOrWhiteSpace(kafka.SaslUsername))
-        {
-            return;
-        }
-
-        config.SecurityProtocol = SecurityProtocol.SaslPlaintext;
-        config.SaslMechanism = SaslMechanism.Plain;
-        config.SaslUsername = kafka.SaslUsername;
-        config.SaslPassword = kafka.SaslPassword;
-    }
 }
