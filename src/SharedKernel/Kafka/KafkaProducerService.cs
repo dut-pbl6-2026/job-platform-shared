@@ -31,8 +31,6 @@ public interface IKafkaProducer : IDisposable
 /// </summary>
 public sealed class KafkaProducerService : IKafkaProducer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     private readonly IProducer<string, string> _producer;
     private readonly ILogger<KafkaProducerService> _logger;
     private bool _disposed;
@@ -69,7 +67,7 @@ public sealed class KafkaProducerService : IKafkaProducer
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var value = JsonSerializer.Serialize(envelope, JsonOptions);
+        var value = JsonSerializer.Serialize(envelope, KafkaJson.Options);
         var report = await _producer.ProduceAsync(
             topic.Trim(),
             new Message<string, string> { Key = key, Value = value },

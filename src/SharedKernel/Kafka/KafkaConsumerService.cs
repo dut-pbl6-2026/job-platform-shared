@@ -58,7 +58,7 @@ public abstract class KafkaConsumerService : BackgroundService
     {
         try
         {
-            envelope = JsonSerializer.Deserialize<EventEnvelope<T>>(json);
+            envelope = JsonSerializer.Deserialize<EventEnvelope<T>>(json, KafkaJson.Options);
             return envelope is not null && envelope.Payload is not null;
         }
         catch (JsonException)

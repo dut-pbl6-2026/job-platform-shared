@@ -3,7 +3,8 @@ namespace SharedKernel.Events;
 /// <summary>
 /// Generic Kafka message envelope. Carries schema version and routing metadata so
 /// consumers can evolve independently: unknown event types are skipped, unknown JSON
-/// fields are ignored (System.Text.Json default), version bumps stay backward compatible.
+/// fields are ignored and property names bind case-insensitively
+/// (see <c>SharedKernel.Kafka.KafkaJson</c>), version bumps stay backward compatible.
 /// </summary>
 /// <typeparam name="T">Payload type (e.g. <see cref="JobCreatedEvent"/>).</typeparam>
 /// <param name="EventId">Unique message id for dedupe and manual replay tracing.</param>
@@ -19,9 +20,15 @@ public sealed record EventEnvelope<T>(
     T Payload)
 {
     /// <summary>Creates a v1 envelope with a new <see cref="EventId"/> and UTC timestamp.</summary>
-    /// <param name="eventType">Event name (see <see cref="JobEventTypes"/> / <see cref="ApplicationEventTypes"/>).</param>
-    /// <param name="payload">Event payload.</param>
+    /// <param name="eventType">Event name (see <see cref="JobEventTypes"/> / <see cref="ApplicationEventTypes"/>). Must not be empty.</param>
+    /// <param name="payload">Event payload. Must not be null.</param>
     /// <returns>Envelope ready to publish via <c>KafkaProducerService</c>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="eventType"/> is empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="payload"/> is null.</exception>
     public static EventEnvelope<T> Create(string eventType, T payload)
-        => new(Guid.NewGuid(), eventType, 1, DateTime.UtcNow, payload);
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
+        ArgumentNullException.ThrowIfNull(payload);
+        return new(Guid.NewGuid(), eventType.Trim(), 1, DateTime.UtcNow, payload);
+    }
 }
