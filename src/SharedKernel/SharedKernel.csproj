@@ -5,10 +5,16 @@
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>JobPlatform.SharedKernel</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>dut-pbl6-2026</Authors>
     <Company>dut-pbl6-2026</Company>
-    <Description>Shared kernel for Job Platform - Result, Entity, ValueObject, JWT constants</Description>
+    <Description>Shared kernel for Job Platform - Result, Entity, ValueObject, JWT constants, Kafka event contracts</Description>
     <RepositoryUrl>https://github.com/dut-pbl6-2026/job-platform-shared</RepositoryUrl>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Confluent.Kafka" Version="2.15.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.0" />
+  </ItemGroup>
 </Project>

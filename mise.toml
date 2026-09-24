@@ -13,6 +13,14 @@ run = "dotnet format --verify-no-changes SharedKernel.sln"
 description = "Pack SharedKernel"
 run = "dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts"
 
+[tasks.test]
+description = "Run tests"
+run = "dotnet test SharedKernel.sln"
+
 [tasks.verify]
-description = "Verify pack artifacts"
-run = 'ls -1 ./artifacts/*.nupkg 2>/dev/null | wc -l; echo " nupkg in artifacts (expected >=1)"'
+description = "Verify: build + test + format + pack"
+# NOTE: sequential && chain (same pattern as crawler/gateway/mobile verify tasks).
+# `&&` works in both cmd (mise shell on Windows) and bash. Parallel `depends`
+# is avoided on purpose: concurrent dotnet builds of the same Debug outputs
+# can clash on bin/obj file locks.
+run = "dotnet build SharedKernel.sln --warnaserror && dotnet test SharedKernel.sln --no-build && dotnet format --verify-no-changes SharedKernel.sln && dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts"

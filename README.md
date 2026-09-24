@@ -1,6 +1,6 @@
 # job-platform-shared
 
-.NET Class Library SharedKernel — **Vietnam Job Platform** (`pbl6`) under [`dut-pbl6-2026`](https://github.com/dut-pbl6-2026). `PackageId JobPlatform.SharedKernel 0.1.0`.
+.NET Class Library SharedKernel — **Vietnam Job Platform** (`pbl6`) under [`dut-pbl6-2026`](https://github.com/dut-pbl6-2026). `PackageId JobPlatform.SharedKernel 0.2.0`.
 
 ## Prerequisites
 
@@ -31,17 +31,41 @@ No `env` needed for this repo (library). For full stack `env` see `job-platform-
 
 ```bash
 mise run build   # dotnet build --warnaserror
+mise run test    # dotnet test (Events/Kafka suite)
 mise run format  # dotnet format --verify-no-changes
 mise run pack    # dotnet pack -o ./artifacts
-mise run verify  # check artifacts nupkg
+mise run verify  # build + test + format + pack
 ```
 
 - `src/SharedKernel` `Result<T>` `Entity` `ValueObject` `JwtOptions`.
+- `src/SharedKernel/Events` `JobEvents` (`job.created|updated|deleted`) `ApplicationEvents` (`application.submitted|status_changed`) `EventEnvelope<T>` — no PII (`SEC-05`).
+- `src/SharedKernel/Kafka` `KafkaOptions` (bootstrap + SASL) `KafkaProducerService` (key-required produce, idempotent) `KafkaConsumerService` (BackgroundService base, manual commit, idle when unconfigured).
 - `GenerateDocumentationFile` true — XML docs required.
+
+Kafka rules: partition key is mandatory (`JobId` for `job-events`, `ApplicationId` for `application-events`); wire JSON is camelCase via `KafkaJson.Options` (case-insensitive on read).
+
+Delivery contract (at-least-once): the consumer commits only after `Handled`/`Skip`; `Retry` (or throw) redelivers after 1s..30s backoff. Handlers must dedupe on `EventEnvelope.EventId` — e.g. unique `(application_id, event_type, status_snapshot)` in notif `email_logs`, ES `_id` = job id in search. Poison/unknown messages must return `Skip` (commit past them), never `Retry`.
+
+Config — dev (local broker, no auth), only bootstrap is set:
+
+```bash
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+```
+
+Config — prod (SASL + TLS, fail-fast on half config). Username set without password, unknown protocol/mechanism, or missing CA file throws at startup:
+
+```bash
+KAFKA_BOOTSTRAP_SERVERS=broker:9092
+Kafka__SaslUsername=svc
+Kafka__SaslPassword=<secret>          # required with username
+Kafka__SecurityProtocol=SaslSsl       # auto when username set; explicit override ok
+Kafka__SaslMechanism=ScramSha256      # Plain (default) | ScramSha256 | ScramSha512
+Kafka__SslCaLocation=/certs/ca.crt    # optional; must exist when set
+```
 
 ## Consume
 
-`JobPlatform.SharedKernel 0.1.0` via `local-feed` + `nuget.config` in `job-platform-auth-svc` (`PackageReference` not `ProjectReference`). For local dev:
+`JobPlatform.SharedKernel 0.2.0` via `local-feed` + `nuget.config` in `job-platform-auth-svc` (`PackageReference` not `ProjectReference`). Services still on `0.1.0` keep working — bump to `0.2.0` only when adopting Kafka events (`PBL6-5`). For local dev:
 
 ```bash
 mise run pack
