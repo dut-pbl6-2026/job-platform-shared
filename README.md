@@ -70,6 +70,24 @@ Kafka__SslCaLocation=/certs/ca.crt    # optional; must exist when set
 ```bash
 mise run pack
 cp artifacts/*.nupkg ../job-platform-auth-svc/local-feed/
+
+When bumping SharedKernel, update `<Version>` in
+`src/SharedKernel/SharedKernel.csproj`, then run:
+
+```powershell
+mise run verify
+mise run syncLocalFeeds
+```
+
+`syncLocalFeeds` packs SharedKernel, copies the package to the local feeds
+of auth-svc and gateway, and updates their exact PackageReference versions
+in Auth.Core, Auth.Infrastructure, and Gateway.Api.
+
+Requires sibling clones of shared, auth-svc, and gateway, plus PowerShell
+and mise.
+
+After synchronization, run restore, build, and tests in both consumers.
+Commit the new packages and updated project files in their respective repos.
 ```
 
 ## Troubleshooting
