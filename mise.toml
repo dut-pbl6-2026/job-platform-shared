@@ -24,3 +24,7 @@ description = "Verify: build + test + format + pack"
 # is avoided on purpose: concurrent dotnet builds of the same Debug outputs
 # can clash on bin/obj file locks.
 run = "dotnet build SharedKernel.sln --warnaserror && dotnet test SharedKernel.sln --no-build && dotnet format --verify-no-changes SharedKernel.sln && dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts"
+
+[tasks.syncLocalFeeds]
+description = "Pack SharedKernel and update auth/gateway pinned feeds"
+run = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/syncLocalFeeds.ps1"
