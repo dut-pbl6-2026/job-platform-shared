@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>JobPlatform.SharedKernel</PackageId>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Authors>dut-pbl6-2026</Authors>
     <Company>dut-pbl6-2026</Company>
     <Description>Shared kernel for Job Platform - Result, Entity, ValueObject, JWT constants, Kafka event contracts</Description>

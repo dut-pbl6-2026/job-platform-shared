@@ -17,7 +17,7 @@ Agent uses `mise exec -- dotnet ...` / `mise exec -- infisical ...` due to non-i
 
 ## Scope
 
-`PBL6-11` shared library — `PackageId JobPlatform.SharedKernel 0.2.0` (`net10.0`) for all svcs+gateway. Owner all TMs. MUST infra dependency per `3.13`. `0.2.0` adds Kafka event contracts + plumbing (`PBL6-5`, `src/SharedKernel/{Events,Kafka}`); consumers on `0.1.0` bump `PackageReference` when they adopt events.
+`PBL6-11` shared library — `PackageId JobPlatform.SharedKernel 0.3.0` (`net10.0`) for all svcs+gateway. Owner all TMs. MUST infra dependency per `3.13`. `0.2.0` adds Kafka event contracts + plumbing (`PBL6-5`, `src/SharedKernel/{Events,Kafka}`); consumers on `0.1.0` bump `PackageReference` when they adopt events. `0.3.0` adds optional `CreatedAt` to `JobCreatedEvent`/`JobUpdatedEvent` (additive, null from older producers): job-svc and search-svc use it; other services can stay on `0.2.0`.
 
 ## Architecture (SRS 8.7 multirepo)
 

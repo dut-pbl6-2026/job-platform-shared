@@ -33,6 +33,39 @@ public class EnvelopeTests
     }
 
     [Fact]
+    public void RoundTrip_JobUpdated_PreservesCreatedAt()
+    {
+        var created = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var updated = new JobUpdatedEvent(
+            Guid.NewGuid(), "Senior .NET Dev", "Experienced .NET",
+            Guid.NewGuid(), "ABC", "Da Nang",
+            20000000m, 40000000m, "VND",
+            null, "CNTT", "FullTime", "Mid", Guid.NewGuid(),
+            "C#", "Lunch", "Active", DateTime.UtcNow, created);
+        var envelope = EventEnvelope<JobUpdatedEvent>.Create(JobEventTypes.Updated, updated);
+
+        var json = JsonSerializer.Serialize(envelope, KafkaJson.Options);
+        var back = JsonSerializer.Deserialize<EventEnvelope<JobUpdatedEvent>>(json, KafkaJson.Options);
+
+        Assert.Contains("\"createdAt\"", json);
+        Assert.Equal(created, back!.Payload.CreatedAt);
+    }
+
+    [Fact]
+    public void JobCreated_FromPre030Producer_HasNullCreatedAt()
+    {
+        // A 0.2.0 producer does not send createdAt: consumers must still bind the event.
+        var json = JsonSerializer.Serialize(EventEnvelope<JobCreatedEvent>.Create(JobEventTypes.Created, SampleJob()), KafkaJson.Options)
+            .Replace(",\"createdAt\":null", string.Empty);
+        Assert.DoesNotContain("createdAt", json);
+
+        var back = JsonSerializer.Deserialize<EventEnvelope<JobCreatedEvent>>(json, KafkaJson.Options);
+
+        Assert.NotNull(back);
+        Assert.Null(back!.Payload.CreatedAt);
+    }
+
+    [Fact]
     public void RoundTrip_ApplicationSubmitted_PreservesPayload()
     {
         var envelope = EventEnvelope<ApplicationSubmittedEvent>.Create(ApplicationEventTypes.Submitted, SampleSubmitted());

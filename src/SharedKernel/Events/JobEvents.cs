@@ -34,6 +34,10 @@ public static class JobEventTypes
 /// <param name="Benefits">Job benefits text, if any.</param>
 /// <param name="Status">Job status string at publish time.</param>
 /// <param name="OccurredAt">UTC time the domain change happened.</param>
+/// <param name="CreatedAt">
+/// UTC time the job was first created (stable across updates). Consumers keep it as the
+/// "posted at" date instead of <paramref name="OccurredAt"/>. Null from producers older than 0.3.0.
+/// </param>
 public sealed record JobCreatedEvent(
     Guid JobId,
     string Title,
@@ -52,7 +56,8 @@ public sealed record JobCreatedEvent(
     string? Requirements,
     string? Benefits,
     string Status,
-    DateTime OccurredAt);
+    DateTime OccurredAt,
+    DateTime? CreatedAt = null);
 
 /// <summary>
 /// Payload of <c>job.updated</c>. Same shape as <see cref="JobCreatedEvent"/> so the
@@ -76,6 +81,10 @@ public sealed record JobCreatedEvent(
 /// <param name="Benefits">Job benefits text, if any.</param>
 /// <param name="Status">Job status string at publish time.</param>
 /// <param name="OccurredAt">UTC time the domain change happened.</param>
+/// <param name="CreatedAt">
+/// UTC time the job was first created (stable across updates). Consumers keep it as the
+/// "posted at" date instead of <paramref name="OccurredAt"/>. Null from producers older than 0.3.0.
+/// </param>
 public sealed record JobUpdatedEvent(
     Guid JobId,
     string Title,
@@ -94,7 +103,8 @@ public sealed record JobUpdatedEvent(
     string? Requirements,
     string? Benefits,
     string Status,
-    DateTime OccurredAt);
+    DateTime OccurredAt,
+    DateTime? CreatedAt = null);
 
 /// <summary>Payload of <c>job.deleted</c>. Kafka key must be <paramref name="JobId"/>.</summary>
 /// <param name="JobId">Deleted job primary key. Also the Kafka message key.</param>
