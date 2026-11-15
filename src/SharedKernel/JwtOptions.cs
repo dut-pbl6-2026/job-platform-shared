@@ -1,12 +1,13 @@
 namespace SharedKernel;
 
-/// <summary>JWT options bound from configuration.</summary>
+/// <summary>
+/// JWT settings bound from configuration. Tokens are RS256, signed by auth-svc; services validate them
+/// with the public keys from auth-svc's JWKS, so this type holds no key material.
+/// </summary>
 public class JwtOptions
 {
     /// <summary>Config section name.</summary>
     public const string SectionName = "Jwt";
-    /// <summary>Signing secret (min 32 chars).</summary>
-    public string Secret { get; set; } = "";
     /// <summary>Issuer.</summary>
     public string Issuer { get; set; } = "job-platform";
     /// <summary>Audience.</summary>

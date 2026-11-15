@@ -5,6 +5,12 @@ All notable changes to `JobPlatform.SharedKernel` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-15
+
+### Removed
+
+- **Breaking:** `JwtOptions.Secret` is removed. Tokens are RS256 and verified from auth-svc's JWKS, so no service holds a shared signing secret. Consumers must not set or read `Jwt:Secret`.
+
 ## [0.3.1] - 2026-11-15
 
 ### Fixed

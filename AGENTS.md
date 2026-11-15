@@ -31,7 +31,7 @@ Agent uses `mise exec -- dotnet ...` / `mise exec -- infisical ...` due to non-i
 Entity          : Id=Guid.NewGuid(), CreatedAt/UpdatedAt=UtcNow, Touch()
 ValueObject     : IEquatable<ValueObject>, GetEqualityComponents() + SequenceEqual + HashCode.Combine + ==/!=
 Result / Result<T>: IsSuccess/Error, Success/Failure(string) — use for domain failures, not exceptions
-JwtOptions      : SectionName="Jwt", Secret≥32, Issuer=Audience="job-platform", ExpiresMinutes=60
+JwtOptions      : SectionName="Jwt", Issuer=Audience="job-platform", ExpiresMinutes=60 (no secret: RS256 keys come from auth-svc JWKS)
 ```
 
 - Namespace `SharedKernel`, `Nullable enable` + `ImplicitUsings`, file-scoped namespace, record-like immutability where sensible (`src/SharedKernel: Entity.cs/ValueObject.cs/Result.cs/JwtOptions.cs`).
