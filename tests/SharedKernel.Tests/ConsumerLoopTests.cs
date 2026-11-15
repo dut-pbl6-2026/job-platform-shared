@@ -7,12 +7,13 @@ namespace SharedKernel.Tests;
 
 /// <summary>
 /// Integration layer: drives the real consume loop of <see cref="KafkaConsumerService"/>
-/// against an in-memory client that models partition positions, seek, pause and commit.
-/// Delays are recorded instead of slept so the suite stays fast.
+/// against an in-memory client that models partition positions, seek, pause and commit,
+/// and an in-memory dead-letter producer. Delays are recorded instead of slept so the suite stays fast.
 /// </summary>
 public class ConsumerLoopTests
 {
     private const string Topic = "job-events";
+    private const string DeadLetterTopic = "job-events.dlq";
 
     [Fact]
     public async Task AllHandled_CommitsEveryOffsetInOrder_WithoutSeek()
@@ -84,14 +85,15 @@ public class ConsumerLoopTests
     }
 
     [Fact]
-    public async Task RetryBudgetExhausted_StopsPartition_AndNeverCommitsPastFailedOffset()
+    public async Task RetryBudgetExhausted_DeadLetterDisabled_StopsPartition_AndNeverCommitsPastFailedOffset()
     {
         var client = new FakeConsumerClient(
             Msg(0, 0, "m0"), Msg(0, 1, "m1"), Msg(0, 2, "m2"), Msg(0, 3, "m3"));
         using var cts = StopWhenIdle(client);
         var delays = new List<TimeSpan>();
+        var producer = new FakeRawProducer(client.Log);
         var consumer = new TestConsumer(client, delays, value =>
-            value == "m1" ? MessageOutcome.Retry : MessageOutcome.Handled);
+            value == "m1" ? MessageOutcome.Retry : MessageOutcome.Handled, producer, deadLetterEnabled: false);
 
         await consumer.Run(cts.Token);
 
@@ -101,16 +103,17 @@ public class ConsumerLoopTests
         Assert.Equal(new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8) }, delays);
         Assert.Equal(new[] { (0, 0L) }, client.Commits);
         Assert.Equal(new[] { 0 }, client.Pauses);
+        Assert.Empty(producer.Published);
     }
 
     [Fact]
-    public async Task RetryBudgetExhausted_OnOnePartition_OtherPartitionKeepsCommitting()
+    public async Task RetryBudgetExhausted_DeadLetterDisabled_OnOnePartition_OtherPartitionKeepsCommitting()
     {
         var client = new FakeConsumerClient(
             Msg(0, 0, "p0-m0"), Msg(1, 0, "p1-m0"), Msg(1, 1, "p1-m1"));
         using var cts = StopWhenIdle(client);
         var consumer = new TestConsumer(client, [], value =>
-            value == "p0-m0" ? MessageOutcome.Retry : MessageOutcome.Handled);
+            value == "p0-m0" ? MessageOutcome.Retry : MessageOutcome.Handled, deadLetterEnabled: false);
 
         await consumer.Run(cts.Token);
 
@@ -178,6 +181,97 @@ public class ConsumerLoopTests
         Assert.Empty(client.Pauses);
     }
 
+    [Fact]
+    public async Task RetryBudgetExhausted_IsDeadLettered_ThenCommitsAndPartitionContinues()
+    {
+        // Poison message m1 keeps failing. It must reach the dead-letter topic before its offset
+        // is committed, and m2 and m3 must still be handled on the same partition.
+        var client = new FakeConsumerClient(
+            Msg(0, 0, "m0"), Msg(0, 1, "m1"), Msg(0, 2, "m2"), Msg(0, 3, "m3"));
+        using var cts = StopWhenIdle(client);
+        var producer = new FakeRawProducer(client.Log);
+        var consumer = new TestConsumer(client, [], value =>
+            value == "m1" ? MessageOutcome.Retry : MessageOutcome.Handled, producer);
+
+        await consumer.Run(cts.Token);
+
+        Assert.Equal(new[] { "m0", "m1", "m1", "m1", "m1", "m1", "m2", "m3" }, consumer.Handled);
+        Assert.Equal(new[] { (0, 1L), (0, 1L), (0, 1L), (0, 1L) }, client.Seeks);
+        Assert.Equal(new[] { (0, 0L), (0, 1L), (0, 2L), (0, 3L) }, client.Commits);
+        Assert.Empty(client.Pauses);
+
+        var published = Assert.Single(producer.Published);
+        Assert.Equal(DeadLetterTopic, published.Topic);
+        Assert.Equal("key", published.Key);
+        Assert.Equal("m1", published.Value);
+        Assert.Single(client.Log.FindAll(entry => entry == "dlq:m1"));
+        Assert.True(client.Log.IndexOf("dlq:m1") < client.Log.IndexOf("commit:0:1"),
+            "The dead-letter publish must complete before the offset is committed.");
+    }
+
+    [Fact]
+    public async Task DeadLetterPublishFails_PausesPartition_AndNeverCommitsFailedOffset()
+    {
+        var client = new FakeConsumerClient(
+            Msg(0, 0, "m0"), Msg(0, 1, "m1"), Msg(0, 2, "m2"));
+        using var cts = StopWhenIdle(client);
+        var producer = new FakeRawProducer(client.Log) { Failure = new InvalidOperationException("broker unavailable") };
+        var consumer = new TestConsumer(client, [], value =>
+            value == "m1" ? MessageOutcome.Retry : MessageOutcome.Handled, producer);
+
+        await consumer.Run(cts.Token);
+
+        Assert.Equal(new[] { "m0", "m1", "m1", "m1", "m1", "m1" }, consumer.Handled);
+        Assert.Equal(new[] { (0, 0L) }, client.Commits);
+        Assert.Equal(new[] { 0 }, client.Pauses);
+        Assert.Single(producer.Published);
+        Assert.DoesNotContain("commit:0:1", client.Log);
+    }
+
+    [Fact]
+    public async Task DeadLetterRecord_CarriesOriginalRecordAndFailureMetadata()
+    {
+        var headers = new Headers { { "trace-id", "abc"u8.ToArray() }, { DeadLetterHeaders.OriginalOffset, "999"u8.ToArray() } };
+        var client = new FakeConsumerClient(Msg(2, 7, "m7", headers));
+        using var cts = StopWhenIdle(client);
+        var producer = new FakeRawProducer(client.Log);
+        var consumer = new TestConsumer(client, [], _ => MessageOutcome.Retry, producer);
+
+        await consumer.Run(cts.Token);
+
+        var published = Assert.Single(producer.Published);
+        Assert.Equal(DeadLetterTopic, published.Topic);
+        Assert.Equal("key", published.Key);
+        Assert.Equal("m7", published.Value);
+        var record = published.Headers.ToDictionary(h => h.Key, h => System.Text.Encoding.UTF8.GetString(h.GetValueBytes()));
+        Assert.Equal("abc", record["trace-id"]);
+        Assert.Equal(Topic, record[DeadLetterHeaders.OriginalTopic]);
+        Assert.Equal("2", record[DeadLetterHeaders.OriginalPartition]);
+        Assert.Equal("7", record[DeadLetterHeaders.OriginalOffset]);
+        Assert.Equal("5", record[DeadLetterHeaders.AttemptCount]);
+        Assert.Equal(DeadLetterHeaders.RetryRequested, record[DeadLetterHeaders.ExceptionType]);
+        Assert.Equal(FixedNow.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture), record[DeadLetterHeaders.FailedAtUtc]);
+        Assert.Equal(1, published.Headers.Count(h => h.Key == DeadLetterHeaders.OriginalOffset));
+    }
+
+    [Fact]
+    public async Task DeadLetterRecord_ExceptionTypeIsRecorded_WithoutExceptionMessage()
+    {
+        var client = new FakeConsumerClient(Msg(0, 0, "m0"));
+        using var cts = StopWhenIdle(client);
+        var producer = new FakeRawProducer(client.Log);
+        var consumer = new TestConsumer(client, [], _ => throw new InvalidOperationException("smtp user@example.com refused"), producer);
+
+        await consumer.Run(cts.Token);
+
+        var published = Assert.Single(producer.Published);
+        var record = published.Headers.ToDictionary(h => h.Key, h => System.Text.Encoding.UTF8.GetString(h.GetValueBytes()));
+        Assert.Equal(typeof(InvalidOperationException).FullName, record[DeadLetterHeaders.ExceptionType]);
+        Assert.DoesNotContain(record.Values, v => v.Contains("example.com", StringComparison.Ordinal));
+    }
+
+    private static readonly DateTimeOffset FixedNow = new(2026, 11, 15, 10, 30, 0, TimeSpan.Zero);
+
     private static CancellationTokenSource StopWhenIdle(FakeConsumerClient client)
     {
         // Safety timeout so a regression cannot hang the test run.
@@ -186,19 +280,20 @@ public class ConsumerLoopTests
         return cts;
     }
 
-    private static ConsumeResult<string, string> Msg(int partition, long offset, string? value)
+    private static ConsumeResult<string, string> Msg(int partition, long offset, string? value, Headers? headers = null)
         => new()
         {
             Topic = Topic,
             Partition = new Partition(partition),
             Offset = new Offset(offset),
-            Message = new Message<string, string> { Key = "key", Value = value! },
+            Message = new Message<string, string> { Key = "key", Value = value!, Headers = headers },
         };
 
     /// <summary>
     /// In-memory consumer that models per-partition positions: Seek rewinds the position so
     /// the failed offset is delivered again. Pause only records the call; messages still
     /// arrive afterwards, which is the worst case (buffered messages) for the stop guard.
+    /// Commits, pauses and dead-letter publishes are also written to one shared <see cref="Log"/>.
     /// </summary>
     private sealed class FakeConsumerClient : IKafkaConsumerClient
     {
@@ -230,6 +325,8 @@ public class ConsumerLoopTests
 
         public List<int> Pauses { get; } = [];
 
+        public List<string> Log { get; } = [];
+
         public Action? OnIdle { get; set; }
 
         public void Subscribe(string topic)
@@ -260,10 +357,17 @@ public class ConsumerLoopTests
             _positions[position.TopicPartition] = list.FindIndex(m => m.Offset.Value == position.Offset.Value);
         }
 
-        public void Pause(TopicPartition partition) => Pauses.Add(partition.Partition.Value);
+        public void Pause(TopicPartition partition)
+        {
+            Pauses.Add(partition.Partition.Value);
+            Log.Add($"pause:{partition.Partition.Value}");
+        }
 
         public void Commit(ConsumeResult<string, string> result)
-            => Commits.Add((result.Partition.Value, result.Offset.Value));
+        {
+            Commits.Add((result.Partition.Value, result.Offset.Value));
+            Log.Add($"commit:{result.Partition.Value}:{result.Offset.Value}");
+        }
 
         public void Close()
         {
@@ -274,6 +378,49 @@ public class ConsumerLoopTests
         }
     }
 
+    /// <summary>Dead-letter producer that records publishes, or throws <see cref="Failure"/> instead.</summary>
+    private sealed class FakeRawProducer : IKafkaRawProducer
+    {
+        private readonly List<string> _log;
+
+        public FakeRawProducer(List<string> log)
+        {
+            _log = log;
+        }
+
+        public List<(string Topic, string? Key, string? Value, Headers Headers)> Published { get; } = [];
+
+        public Exception? Failure { get; init; }
+
+        public Task ProduceAsync(string topic, string? key, string? value, Headers headers, CancellationToken ct)
+        {
+            Published.Add((topic, key, value, headers));
+            _log.Add($"dlq:{value}");
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        private readonly DateTimeOffset _now;
+
+        public FixedTimeProvider(DateTimeOffset now)
+        {
+            _now = now;
+        }
+
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
     private sealed class TestConsumer : KafkaConsumerService
     {
         private readonly Func<string?, MessageOutcome> _decide;
@@ -281,16 +428,20 @@ public class ConsumerLoopTests
         public TestConsumer(
             FakeConsumerClient client,
             List<TimeSpan> delays,
-            Func<string?, MessageOutcome> decide)
+            Func<string?, MessageOutcome> decide,
+            FakeRawProducer? producer = null,
+            bool deadLetterEnabled = true)
             : base(
-                Options.Create(new KafkaOptions { BootstrapServers = "fake:9092" }),
+                Options.Create(new KafkaOptions { BootstrapServers = "fake:9092", DeadLetterEnabled = deadLetterEnabled }),
                 TestLogger.Instance,
                 _ => client,
                 (delay, _) =>
                 {
                     delays.Add(delay);
                     return Task.CompletedTask;
-                })
+                },
+                _ => producer ?? new FakeRawProducer(client.Log),
+                new FixedTimeProvider(FixedNow))
         {
             _decide = decide;
         }

@@ -18,7 +18,9 @@ public enum MessageOutcome
 
     /// <summary>
     /// Transient failure (DB/ES/SMTP down): seek back and redeliver the same message after
-    /// backoff. After the bounded retry budget the partition is stopped, uncommitted.
+    /// backoff. After the bounded retry budget the message is published to the dead-letter topic
+    /// and the partition moves on; if that publish fails (or dead-lettering is disabled) the
+    /// partition is stopped, uncommitted.
     /// </summary>
     Retry = 2,
 }

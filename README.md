@@ -44,7 +44,32 @@ mise run verify  # build + test + format + pack
 
 Kafka rules: partition key is mandatory (`JobId` for `job-events`, `ApplicationId` for `application-events`); wire JSON is camelCase via `KafkaJson.Options` (case-insensitive on read).
 
-Delivery contract (at-least-once): the consumer commits only after `Handled`/`Skip`; `Retry` (or throw) seeks back to the failed offset and redelivers it after 1s, 2s, 4s, 8s backoff (5 attempts in total). If all 5 attempts fail, the partition is paused and its offset stays uncommitted until the service restarts (error logged with topic, partition and offset). There is no dead-letter topic. Handlers must dedupe on `EventEnvelope.EventId` — e.g. unique `(application_id, event_type, status_snapshot)` in notif `email_logs`, ES `_id` = job id in search. Poison/unknown messages must return `Skip` (commit past them), never `Retry`.
+Delivery contract (at-least-once): the consumer commits only after `Handled`/`Skip`; `Retry` (or throw) seeks back to the failed offset and redelivers it after 1s, 2s, 4s, 8s backoff (5 attempts in total). If all 5 attempts fail, the failed message is published to the dead-letter topic (see below) and only then is its offset committed, so the partition moves on. If the dead-letter publish fails, or dead-lettering is disabled, the partition is paused and its offset stays uncommitted until the service restarts (error logged with topic, partition and offset). Handlers must dedupe on `EventEnvelope.EventId` — e.g. unique `(application_id, event_type, status_snapshot)` in notif `email_logs`, ES `_id` = job id in search. Poison/unknown messages must return `Skip` (commit past them, not dead-lettered), never `Retry`.
+
+### Dead-letter topic
+
+- Name: `<original topic>` + `DeadLetterTopicSuffix` (default `.dlq`), e.g. `job-events.dlq`, `application-events.dlq`. The suffix may contain only ASCII letters, digits, `.`, `_`, `-`; the full name must be at most 249 characters. An invalid name stops the consumer at startup.
+- Enabled by default. Config: `Kafka:DeadLetterEnabled` (default `true`), `Kafka:DeadLetterTopicSuffix` (default `.dlq`). Env: `Kafka__DeadLetterEnabled`, `Kafka__DeadLetterTopicSuffix`.
+- Record: the same key (may be null for legacy messages), the same value (may be null for tombstones) and the original headers. Metadata headers below are added; any metadata header already on the original message is replaced, so a replayed record never carries two copies.
+
+| Header | Value |
+|---|---|
+| `dlq-original-topic` | Topic consumed from, UTF-8 |
+| `dlq-original-partition` | Partition, decimal |
+| `dlq-original-offset` | Offset, decimal |
+| `dlq-exception-type` | Full type name of the last exception thrown by the handler (no exception message: it can contain personal data). `MessageOutcome.Retry` when the handler returned `Retry` without throwing |
+| `dlq-attempt-count` | Failed handler invocations for this message in this consumer, decimal (normally 5) |
+| `dlq-failed-at-utc` | UTC time of dead-lettering, ISO 8601 round-trip (`O`), e.g. `2026-11-15T10:30:00.0000000Z` |
+
+Producer settings are the shared ones (`acks=all`, idempotence, 10s message timeout), the same as `KafkaProducerService`.
+
+Delivery to the dead-letter topic is at-least-once: if the offset commit fails after a successful dead-letter publish, the message is dead-lettered again on redelivery. DLQ readers must dedupe on `(dlq-original-topic, dlq-original-partition, dlq-original-offset)`.
+
+Operational requirements:
+- The dead-letter topic must exist before deploy (or be auto-created). If a publish fails, the partition pauses until restart, so a missing topic stalls that partition rather than dropping messages.
+- Under SASL, the consumer principal needs WRITE on `<topic>.dlq` in addition to READ on the source topic.
+- Retry attempts are counted in consumer memory. A rebalance restarts the count; the message is still never committed without being handled or dead-lettered.
+- Nothing consumes the dead-letter topics yet. Replay is a manual or future tool; until then, DLQ volume needs monitoring.
 
 Config — dev (local broker, no auth), only bootstrap is set:
 
@@ -61,6 +86,8 @@ Kafka__SaslPassword=<secret>          # required with username
 Kafka__SecurityProtocol=SaslSsl       # auto when username set; explicit override ok
 Kafka__SaslMechanism=ScramSha256      # Plain (default) | ScramSha256 | ScramSha512
 Kafka__SslCaLocation=/certs/ca.crt    # optional; must exist when set
+Kafka__DeadLetterEnabled=true         # default true
+Kafka__DeadLetterTopicSuffix=.dlq     # default .dlq
 ```
 
 ## Consume
