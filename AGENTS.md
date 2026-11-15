@@ -21,7 +21,7 @@ Agent uses `mise exec -- dotnet ...` / `mise exec -- infisical ...` due to non-i
 
 ## Architecture (SRS 8.7 multirepo)
 
-- **Consumers:** `auth-svc` + `job-svc` + `search-svc` + `app-svc` + `profile-svc` + `notif-svc` + `gateway` via `PackageReference` only (never `ProjectReference` per `master-plan.md:132`), `nuget.config` `local-feed` in `auth-svc` for local dev.
+- **Consumers:** `auth-svc` + `job-svc` + `search-svc` + `app-svc` + `profile-svc` + `notif-svc` + `gateway` via `PackageReference` only (never `ProjectReference` per `master-plan.md:132`), `nuget.config` `local-feed` in `auth-svc` for local dev; released versions come from GitHub Packages (see Release).
 - **Contracts:** DDD building blocks + Kafka event contracts/plumbing (`PBL6-5`) — no other infra. Event schema dual-read for `job.created|updated|deleted|application.submitted|status_changed` (`8-system-architecture.md:8.5`): `Events/{JobEvents,ApplicationEvents,EventEnvelope}.cs` (payloads + envelope, no PII per `SEC-05`), `Kafka/{KafkaOptions,KafkaProducerService,KafkaConsumerService}.cs` (transport only; topic/group stay per-service).
 - **Versioning:** SemVer `0.1.0` (`<Version>` in `SharedKernel.csproj`), breaking change = major bump + `Pact` contract test block in service CI (`3-must-have-fr.md:3.13`), Dependabot + `repository_dispatch` propagation.
 
@@ -54,4 +54,15 @@ mise run verify # 1 nupkg
 cp artifacts/*.nupkg ../job-platform-auth-svc/local-feed/
 ```
 
-`feature/* → main` (e.g., `feature/PBL6-12-shared-kernel`), PR must update `CHANGELOG` on version bump, tag `v0.1.0` on `main` triggers NuGet push to GHCR/Feed.
+`feature/* → main` (e.g., `feature/PBL6-12-shared-kernel`), PR must update `CHANGELOG` on version bump.
+
+## Release
+
+Packages are published to the GitHub Packages NuGet feed `https://nuget.pkg.github.com/dut-pbl6-2026/index.json` by `.github/workflows/release.yml`. Only a tag pushed to a commit matching `v*.*.*` starts it; a plain push to `main` does not publish.
+
+1. PR to `main`: bump `<Version>` in `src/SharedKernel/SharedKernel.csproj` and add a `## [X.Y.Z] - YYYY-MM-DD` entry to `CHANGELOG.md`. Merge it.
+2. Tag the merged commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. The workflow: the `test` job fails unless the tag equals `<Version>` and CHANGELOG has an entry for it, then runs build (`--warnaserror`) and tests. The `publish` job (`packages: write` only there) packs and pushes with the built-in `GITHUB_TOKEN`.
+4. Versions are immutable on the feed. If `X.Y.Z` already exists, the push fails with a message saying so; there is no overwrite and no skip. Fix a bad release by bumping to a new version, never by re-tagging.
+
+Consumers: add the GitHub Packages source with a token that has `read:packages` (see README "Consume"). Do not commit the token.
