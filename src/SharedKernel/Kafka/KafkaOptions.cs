@@ -42,12 +42,38 @@ public class KafkaOptions
     /// </summary>
     public string SslCaLocation { get; set; } = string.Empty;
 
+    /// <summary>Default suffix of the dead-letter topic: <c>&lt;original topic&gt;.dlq</c>.</summary>
+    public const string DefaultDeadLetterTopicSuffix = ".dlq";
+
+    /// <summary>
+    /// When true (default), a message whose handler retry budget is exhausted is published to
+    /// <c>&lt;original topic&gt;</c> + <see cref="DeadLetterTopicSuffix"/> and the partition moves on.
+    /// When false, the partition stops (uncommitted) until restart, as before dead-lettering existed.
+    /// </summary>
+    public bool DeadLetterEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Suffix appended to the consumed topic to get the dead-letter topic name. Only letters,
+    /// digits, <c>.</c>, <c>_</c> and <c>-</c>; must not be empty (an empty suffix would
+    /// make the dead-letter topic the source topic).
+    /// </summary>
+    public string DeadLetterTopicSuffix { get; set; } = DefaultDeadLetterTopicSuffix;
+
     /// <summary>Validates security settings. Fail-fast on unsafe or unknown configuration.</summary>
     /// <exception cref="InvalidOperationException">
-    /// Username without password, unknown protocol/mechanism, or missing CA file.
+    /// Username without password, unknown protocol/mechanism, missing CA file, or an invalid
+    /// dead-letter topic suffix.
     /// </exception>
     public void Validate()
     {
+        if (DeadLetterTopicSuffix is null
+            || DeadLetterTopicSuffix.Length == 0
+            || !DeadLetterTopicSuffix.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-'))
+        {
+            throw new InvalidOperationException(
+                $"Invalid Kafka DeadLetterTopicSuffix '{DeadLetterTopicSuffix}'. Use only ASCII letters, digits, '.', '_' or '-', and do not leave it empty.");
+        }
+
         if (!string.IsNullOrWhiteSpace(SaslUsername) && string.IsNullOrWhiteSpace(SaslPassword))
         {
             throw new InvalidOperationException(

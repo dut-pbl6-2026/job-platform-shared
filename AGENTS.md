@@ -42,7 +42,7 @@ JwtOptions      : SectionName="Jwt", Secret≥32, Issuer=Audience="job-platform"
 - `dotnet 10.0.100` `net10.0`, `dotnet build --warnaserror` + `dotnet format --verify-no-changes` (mise `build/format`), keep `ImplicitUsings` + `Nullable`.
 - Coverage `>70%` via consumers, plus direct xUnit suite `tests/SharedKernel.Tests` for Events/Kafka (`mise run test`), `OpenAPI` via consumers, `Bump System.Security.Cryptography.Xml 10.0.11` for `NU1903`.
 - Keep `SharedKernel.csproj` minimal — no `EF`/`Npgsql`/`BCrypt`, no `appsettings.json`. Only allowed extra refs are the Kafka set (`Confluent.Kafka 2.*` + `Microsoft.Extensions.{Hosting,Logging,Options}.Abstractions 10.0.0` for the producer/consumer base).
-- Kafka rules for producers/consumers: partition key is mandatory (`JobId`/`ApplicationId`, plan `2.2.1`), payloads carry no PII (`SEC-05`), consumers commit offsets only after successful handling (at-least-once, handlers must be idempotent).
+- Kafka rules for producers/consumers: partition key is mandatory (`JobId`/`ApplicationId`, plan `2.2.1`), payloads carry no PII (`SEC-05`), consumers commit offsets only after successful handling (at-least-once, handlers must be idempotent). After the retry budget (5 attempts) the message goes to `<topic>.dlq` with the original key, value and headers plus `dlq-*` metadata headers; the partition then continues. Topic naming, config and the header table: README "Dead-letter topic". Consumer services must create `<topic>.dlq` (or enable auto-create) before deploy.
 
 ## Workflow
 

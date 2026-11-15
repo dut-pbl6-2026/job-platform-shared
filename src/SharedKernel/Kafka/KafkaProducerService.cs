@@ -50,6 +50,17 @@ public sealed class KafkaProducerService : IKafkaProducer
         }
 
         kafka.Validate();
+        _producer = new ProducerBuilder<string, string>(CreateConfig(kafka)).Build();
+    }
+
+    /// <summary>
+    /// Producer settings shared by every producer in this library (acks=all, idempotence,
+    /// 10s message timeout, transport security). The dead-letter producer uses the same settings.
+    /// </summary>
+    /// <param name="kafka">Validated Kafka options with a non-empty bootstrap list.</param>
+    /// <returns>Producer config.</returns>
+    internal static ProducerConfig CreateConfig(KafkaOptions kafka)
+    {
         var config = new ProducerConfig
         {
             BootstrapServers = kafka.BootstrapServers.Trim(),
@@ -58,7 +69,7 @@ public sealed class KafkaProducerService : IKafkaProducer
             MessageTimeoutMs = 10_000,
         };
         KafkaSecurity.Apply(config, kafka);
-        _producer = new ProducerBuilder<string, string>(config).Build();
+        return config;
     }
 
     /// <inheritdoc />

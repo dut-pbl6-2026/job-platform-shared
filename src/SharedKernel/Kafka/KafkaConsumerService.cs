@@ -18,9 +18,12 @@ namespace SharedKernel.Kafka;
 /// <see cref="MessageOutcome.Handled"/> or <see cref="MessageOutcome.Skip"/>.
 /// A <see cref="MessageOutcome.Retry"/> (or a thrown exception) seeks back to the failed
 /// offset and redelivers it after backoff. When the retry budget
-/// (5 handler invocations for one message, about 15s of backoff in total) is exhausted the partition
-/// is paused and no offset at or past the failed message is committed until the service
-/// restarts; the failure is logged at Error with topic, partition and offset.
+/// (5 handler invocations for one message, about 15s of backoff in total) is exhausted the failed
+/// message is published to the dead-letter topic <c>&lt;topic&gt;</c> + <see cref="KafkaOptions.DeadLetterTopicSuffix"/>
+/// (default <c>.dlq</c>, see README "Dead-letter topic"). Only after that publish is acknowledged is the
+/// offset committed and the partition continues. If dead-lettering is disabled, or the dead-letter
+/// publish fails, the partition is paused and no offset at or past the failed message is committed
+/// until the service restarts; the failure is logged at Error with topic, partition and offset.
 /// A crash between a side effect and the commit redelivers the same
 /// <c>EventEnvelope.EventId</c>, so handlers must dedupe on it (e.g. unique
 /// <c>(application_id, event_type, status_snapshot)</c> in notif email_logs,
@@ -34,6 +37,8 @@ public abstract class KafkaConsumerService : BackgroundService
     private readonly ILogger _logger;
     private readonly Func<ConsumerConfig, IKafkaConsumerClient> _clientFactory;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly Func<ProducerConfig, IKafkaRawProducer> _deadLetterProducerFactory;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Topic to subscribe (e.g. job-events).</summary>
     protected abstract string Topic { get; }
@@ -45,26 +50,38 @@ public abstract class KafkaConsumerService : BackgroundService
     /// <param name="options">Shared Kafka options (bootstrap servers, SASL/TLS).</param>
     /// <param name="logger">Logger (pass the typed logger of the derived class).</param>
     protected KafkaConsumerService(IOptions<KafkaOptions> options, ILogger logger)
-        : this(options, logger, KafkaConsumerClient.Create, (delay, ct) => Task.Delay(delay, ct))
+        : this(
+            options,
+            logger,
+            KafkaConsumerClient.Create,
+            (delay, ct) => Task.Delay(delay, ct),
+            KafkaRawProducer.Create,
+            TimeProvider.System)
     {
     }
 
-    /// <summary>Creates the consumer base with injectable client and delay (tests).</summary>
+    /// <summary>Creates the consumer base with injectable client, delay, dead-letter producer and clock (tests).</summary>
     /// <param name="options">Shared Kafka options.</param>
     /// <param name="logger">Logger.</param>
     /// <param name="clientFactory">Builds the Kafka client from the consumer config.</param>
     /// <param name="delay">Waits for a backoff delay; returns when elapsed or cancelled.</param>
+    /// <param name="deadLetterProducerFactory">Builds the producer for dead-letter records from the shared producer config.</param>
+    /// <param name="timeProvider">Clock for the dead-letter failed-at header.</param>
     internal KafkaConsumerService(
         IOptions<KafkaOptions> options,
         ILogger logger,
         Func<ConsumerConfig, IKafkaConsumerClient> clientFactory,
-        Func<TimeSpan, CancellationToken, Task> delay)
+        Func<TimeSpan, CancellationToken, Task> delay,
+        Func<ProducerConfig, IKafkaRawProducer> deadLetterProducerFactory,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("KafkaOptions not configured.");
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
         _delay = delay ?? throw new ArgumentNullException(nameof(delay));
+        _deadLetterProducerFactory = deadLetterProducerFactory ?? throw new ArgumentNullException(nameof(deadLetterProducerFactory));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _options.Validate();
     }
 
@@ -135,12 +152,17 @@ public abstract class KafkaConsumerService : BackgroundService
             return;
         }
 
+        // Fail fast: an invalid dead-letter name would otherwise surface only after a message fails.
+        var deadLetterTopic = _options.DeadLetterEnabled
+            ? DeadLetter.TopicName(Topic, _options.DeadLetterTopicSuffix)
+            : null;
+
         var generations = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await RunLoopAsync(stoppingToken);
+                await RunLoopAsync(deadLetterTopic, stoppingToken);
                 return;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -162,7 +184,7 @@ public abstract class KafkaConsumerService : BackgroundService
         }
     }
 
-    private async Task RunLoopAsync(CancellationToken stoppingToken)
+    private async Task RunLoopAsync(string? deadLetterTopic, CancellationToken stoppingToken)
     {
         var config = new ConsumerConfig
         {
@@ -175,13 +197,19 @@ public abstract class KafkaConsumerService : BackgroundService
         KafkaSecurity.Apply(config, _options);
 
         using var consumer = _clientFactory(config);
+        // Null when dead-lettering is disabled: exhausted messages then stop the partition.
+        using var deadLetterProducer = deadLetterTopic is null
+            ? null
+            : _deadLetterProducerFactory(KafkaProducerService.CreateConfig(_options));
         consumer.Subscribe(Topic);
         _logger.LogInformation(
-            "{Consumer} started. Topic={Topic} Group={Group}.",
-            GetType().Name, Topic, GroupId);
+            "{Consumer} started. Topic={Topic} Group={Group} DeadLetterTopic={DeadLetterTopic}.",
+            GetType().Name, Topic, GroupId, deadLetterTopic ?? "(disabled)");
 
         var consumeFailures = 0;
         // Consecutive handler failures for the offset currently being retried, per partition.
+        // Kept in this consumer's memory only: a rebalance restarts the budget, which is safe
+        // because the offset is committed only after handling or dead-lettering.
         var attempts = new Dictionary<TopicPartition, (Offset Offset, int Count)>();
         // Partitions stopped after an exhausted retry budget. Nothing from them is handled or committed.
         var stopped = new HashSet<TopicPartition>();
@@ -226,6 +254,7 @@ public abstract class KafkaConsumerService : BackgroundService
                 }
 
                 MessageOutcome outcome;
+                var exceptionType = DeadLetterHeaders.RetryRequested;
                 try
                 {
                     outcome = await HandleMessageAsync(result.Message.Key, result.Message.Value, stoppingToken);
@@ -240,6 +269,7 @@ public abstract class KafkaConsumerService : BackgroundService
                         ex, "Kafka handle threw topic={Topic} partition={Partition} key={Key} offset={Offset}. Treating as Retry.",
                         result.Topic, result.Partition.Value, result.Message.Key, result.Offset.Value);
                     outcome = MessageOutcome.Retry;
+                    exceptionType = ex.GetType().FullName ?? ex.GetType().Name;
                 }
 
                 switch (outcome)
@@ -276,12 +306,44 @@ public abstract class KafkaConsumerService : BackgroundService
                             break;
                         }
 
-                        // Budget exhausted: stop this partition. The offset is never committed.
+                        // Budget exhausted. Dead-letter the message; commit past it only after the
+                        // dead-letter publish is acknowledged. Otherwise stop the partition uncommitted.
+                        // This is the last failed invocation, so its exception is the one recorded.
+                        var exhaustedType = exceptionType;
                         attempts.Remove(tp);
-                        stopped.Add(tp);
-                        consumer.Pause(tp);
+                        if (deadLetterProducer is not null && deadLetterTopic is not null)
+                        {
+                            try
+                            {
+                                var headers = DeadLetter.BuildHeaders(result, attempt, exhaustedType, _timeProvider.GetUtcNow());
+                                await deadLetterProducer.ProduceAsync(
+                                    deadLetterTopic, result.Message.Key, result.Message.Value, headers, stoppingToken);
+                            }
+                            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                            {
+                                // Shutdown mid-publish: nothing committed, the message is redelivered.
+                                return;
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(
+                                    ex, "Kafka dead-letter publish failed topic={Topic} partition={Partition} offset={Offset} key={Key} deadLetterTopic={DeadLetterTopic}. Offset not committed; partition paused until restart.",
+                                    result.Topic, result.Partition.Value, result.Offset.Value, result.Message.Key, deadLetterTopic);
+                                StopPartition(consumer, stopped, tp);
+                                break;
+                            }
+
+                            Commit(consumer, result);
+                            consumeFailures = 0;
+                            _logger.LogError(
+                                "Kafka message dead-lettered after {Attempts} attempts topic={Topic} partition={Partition} offset={Offset} key={Key} deadLetterTopic={DeadLetterTopic} exceptionType={ExceptionType}. Committed; partition continues.",
+                                attempt, result.Topic, result.Partition.Value, result.Offset.Value, result.Message.Key, deadLetterTopic, exhaustedType);
+                            break;
+                        }
+
+                        StopPartition(consumer, stopped, tp);
                         _logger.LogError(
-                            "Kafka partition stopped after {Attempts} attempts topic={Topic} partition={Partition} offset={Offset} key={Key}. Offset not committed; partition paused until restart.",
+                            "Kafka partition stopped after {Attempts} attempts topic={Topic} partition={Partition} offset={Offset} key={Key}. Dead-lettering disabled; offset not committed; partition paused until restart.",
                             attempt, result.Topic, result.Partition.Value, result.Offset.Value, result.Message.Key);
                         break;
 
@@ -322,6 +384,12 @@ public abstract class KafkaConsumerService : BackgroundService
                 ex, "Kafka commit failed topic={Topic} offset={Offset}. May redeliver.",
                 result.Topic, result.Offset.Value);
         }
+    }
+
+    private static void StopPartition(IKafkaConsumerClient consumer, HashSet<TopicPartition> stopped, TopicPartition partition)
+    {
+        stopped.Add(partition);
+        consumer.Pause(partition);
     }
 
     private async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
