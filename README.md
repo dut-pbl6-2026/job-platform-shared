@@ -44,7 +44,7 @@ mise run verify  # build + test + format + pack
 
 Kafka rules: partition key is mandatory (`JobId` for `job-events`, `ApplicationId` for `application-events`); wire JSON is camelCase via `KafkaJson.Options` (case-insensitive on read).
 
-Delivery contract (at-least-once): the consumer commits only after `Handled`/`Skip`; `Retry` (or throw) redelivers after 1s..30s backoff. Handlers must dedupe on `EventEnvelope.EventId` — e.g. unique `(application_id, event_type, status_snapshot)` in notif `email_logs`, ES `_id` = job id in search. Poison/unknown messages must return `Skip` (commit past them), never `Retry`.
+Delivery contract (at-least-once): the consumer commits only after `Handled`/`Skip`; `Retry` (or throw) seeks back to the failed offset and redelivers it after 1s, 2s, 4s, 8s backoff (5 attempts in total). If all 5 attempts fail, the partition is paused and its offset stays uncommitted until the service restarts (error logged with topic, partition and offset). There is no dead-letter topic. Handlers must dedupe on `EventEnvelope.EventId` — e.g. unique `(application_id, event_type, status_snapshot)` in notif `email_logs`, ES `_id` = job id in search. Poison/unknown messages must return `Skip` (commit past them), never `Retry`.
 
 Config — dev (local broker, no auth), only bootstrap is set:
 

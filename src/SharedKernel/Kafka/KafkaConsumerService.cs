@@ -16,6 +16,11 @@ namespace SharedKernel.Kafka;
 /// <remarks>
 /// Delivery contract: at-least-once. The offset commits only after
 /// <see cref="MessageOutcome.Handled"/> or <see cref="MessageOutcome.Skip"/>.
+/// A <see cref="MessageOutcome.Retry"/> (or a thrown exception) seeks back to the failed
+/// offset and redelivers it after backoff. When the retry budget
+/// (5 handler invocations for one message, about 15s of backoff in total) is exhausted the partition
+/// is paused and no offset at or past the failed message is committed until the service
+/// restarts; the failure is logged at Error with topic, partition and offset.
 /// A crash between a side effect and the commit redelivers the same
 /// <c>EventEnvelope.EventId</c>, so handlers must dedupe on it (e.g. unique
 /// <c>(application_id, event_type, status_snapshot)</c> in notif email_logs,
@@ -27,6 +32,8 @@ public abstract class KafkaConsumerService : BackgroundService
 {
     private readonly KafkaOptions _options;
     private readonly ILogger _logger;
+    private readonly Func<ConsumerConfig, IKafkaConsumerClient> _clientFactory;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
     /// <summary>Topic to subscribe (e.g. job-events).</summary>
     protected abstract string Topic { get; }
@@ -38,10 +45,26 @@ public abstract class KafkaConsumerService : BackgroundService
     /// <param name="options">Shared Kafka options (bootstrap servers, SASL/TLS).</param>
     /// <param name="logger">Logger (pass the typed logger of the derived class).</param>
     protected KafkaConsumerService(IOptions<KafkaOptions> options, ILogger logger)
+        : this(options, logger, KafkaConsumerClient.Create, (delay, ct) => Task.Delay(delay, ct))
+    {
+    }
+
+    /// <summary>Creates the consumer base with injectable client and delay (tests).</summary>
+    /// <param name="options">Shared Kafka options.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="clientFactory">Builds the Kafka client from the consumer config.</param>
+    /// <param name="delay">Waits for a backoff delay; returns when elapsed or cancelled.</param>
+    internal KafkaConsumerService(
+        IOptions<KafkaOptions> options,
+        ILogger logger,
+        Func<ConsumerConfig, IKafkaConsumerClient> clientFactory,
+        Func<TimeSpan, CancellationToken, Task> delay)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("KafkaOptions not configured.");
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
+        _delay = delay ?? throw new ArgumentNullException(nameof(delay));
         _options.Validate();
     }
 
@@ -63,9 +86,9 @@ public abstract class KafkaConsumerService : BackgroundService
 
     /// <summary>
     /// Parses an envelope with the shared <c>KafkaJson</c> policy. Returns false for
-    /// poison messages (SEC-K4): the caller should return
-    /// <see cref="MessageOutcome.Skip"/> so the offset commits past it instead of
-    /// looping forever.
+    /// poison messages (SEC-K4), including null or empty values (Kafka tombstones): the
+    /// caller should return <see cref="MessageOutcome.Skip"/> so the offset commits past
+    /// it instead of looping forever.
     /// </summary>
     /// <typeparam name="T">Payload type.</typeparam>
     /// <param name="json">Raw message value.</param>
@@ -73,6 +96,12 @@ public abstract class KafkaConsumerService : BackgroundService
     /// <returns>True when the envelope parsed and carries a payload.</returns>
     protected static bool TryParseEnvelope<T>(string json, out EventEnvelope<T>? envelope)
     {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            envelope = null;
+            return false;
+        }
+
         try
         {
             envelope = JsonSerializer.Deserialize<EventEnvelope<T>>(json, KafkaJson.Options);
@@ -125,11 +154,7 @@ public abstract class KafkaConsumerService : BackgroundService
                 _logger.LogError(
                     ex, "{Consumer} fatal error. Recreating consumer in {Delay}s (generation {Generation}).",
                     GetType().Name, delay.TotalSeconds, generations);
-                try
-                {
-                    await Task.Delay(delay, stoppingToken);
-                }
-                catch (OperationCanceledException)
+                if (!await DelayAsync(delay, stoppingToken))
                 {
                     return;
                 }
@@ -149,13 +174,17 @@ public abstract class KafkaConsumerService : BackgroundService
         };
         KafkaSecurity.Apply(config, _options);
 
-        using var consumer = new ConsumerBuilder<string, string>(config).Build();
+        using var consumer = _clientFactory(config);
         consumer.Subscribe(Topic);
         _logger.LogInformation(
             "{Consumer} started. Topic={Topic} Group={Group}.",
             GetType().Name, Topic, GroupId);
 
-        var failures = 0;
+        var consumeFailures = 0;
+        // Consecutive handler failures for the offset currently being retried, per partition.
+        var attempts = new Dictionary<TopicPartition, (Offset Offset, int Count)>();
+        // Partitions stopped after an exhausted retry budget. Nothing from them is handled or committed.
+        var stopped = new HashSet<TopicPartition>();
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -172,11 +201,11 @@ public abstract class KafkaConsumerService : BackgroundService
                 }
                 catch (ConsumeException ex)
                 {
-                    failures++;
+                    consumeFailures++;
                     _logger.LogWarning(
                         ex, "Kafka consume error on topic {Topic}. Retrying in {Delay}s.",
-                        Topic, RetryDelay(failures).TotalSeconds);
-                    if (!await DelayAsync(RetryDelay(failures), stoppingToken))
+                        Topic, RetryDelay(consumeFailures).TotalSeconds);
+                    if (!await DelayAsync(RetryDelay(consumeFailures), stoppingToken))
                     {
                         return;
                     }
@@ -186,6 +215,13 @@ public abstract class KafkaConsumerService : BackgroundService
 
                 if (result is null || result.IsPartitionEOF)
                 {
+                    continue;
+                }
+
+                if (stopped.Contains(result.TopicPartition))
+                {
+                    // Already buffered before the pause took effect. Dropping it keeps the
+                    // failed offset uncommitted and nothing past it committed.
                     continue;
                 }
 
@@ -200,41 +236,59 @@ public abstract class KafkaConsumerService : BackgroundService
                 }
                 catch (Exception ex)
                 {
-                    failures++;
                     _logger.LogError(
-                        ex, "Kafka handle failed topic={Topic} key={Key} offset={Offset}. Will redeliver in {Delay}s.",
-                        result.Topic, result.Message.Key, result.Offset, RetryDelay(failures).TotalSeconds);
-                    if (!await DelayAsync(RetryDelay(failures), stoppingToken))
-                    {
-                        return;
-                    }
-
-                    continue;
+                        ex, "Kafka handle threw topic={Topic} partition={Partition} key={Key} offset={Offset}. Treating as Retry.",
+                        result.Topic, result.Partition.Value, result.Message.Key, result.Offset.Value);
+                    outcome = MessageOutcome.Retry;
                 }
 
                 switch (outcome)
                 {
                     case MessageOutcome.Skip:
                         Commit(consumer, result);
-                        failures = 0;
+                        consumeFailures = 0;
+                        attempts.Remove(result.TopicPartition);
                         _logger.LogWarning(
                             "Kafka skipped topic={Topic} key={Key} offset={Offset} (poison/unknown, committed).",
-                            result.Topic, result.Message.Key, result.Offset);
+                            result.Topic, result.Message.Key, result.Offset.Value);
                         break;
+
                     case MessageOutcome.Retry:
-                        failures++;
-                        _logger.LogWarning(
-                            "Kafka handler requested retry topic={Topic} key={Key} offset={Offset}. Retrying in {Delay}s.",
-                            result.Topic, result.Message.Key, result.Offset, RetryDelay(failures).TotalSeconds);
-                        if (!await DelayAsync(RetryDelay(failures), stoppingToken))
+                        var tp = result.TopicPartition;
+                        var attempt = attempts.TryGetValue(tp, out var previous) && previous.Offset == result.Offset
+                            ? previous.Count + 1
+                            : 1;
+                        attempts[tp] = (result.Offset, attempt);
+
+                        var decision = RetryPolicy.Decide(attempt);
+                        if (decision.Retry)
                         {
-                            return;
+                            _logger.LogWarning(
+                                "Kafka handler requested retry topic={Topic} partition={Partition} key={Key} offset={Offset} attempt={Attempt}. Seeking back and retrying in {Delay}s.",
+                                result.Topic, result.Partition.Value, result.Message.Key, result.Offset.Value,
+                                attempt, decision.Delay.TotalSeconds);
+                            consumer.Seek(result.TopicPartitionOffset);
+                            if (!await DelayAsync(decision.Delay, stoppingToken))
+                            {
+                                return;
+                            }
+
+                            break;
                         }
 
+                        // Budget exhausted: stop this partition. The offset is never committed.
+                        attempts.Remove(tp);
+                        stopped.Add(tp);
+                        consumer.Pause(tp);
+                        _logger.LogError(
+                            "Kafka partition stopped after {Attempts} attempts topic={Topic} partition={Partition} offset={Offset} key={Key}. Offset not committed; partition paused until restart.",
+                            attempt, result.Topic, result.Partition.Value, result.Offset.Value, result.Message.Key);
                         break;
+
                     default:
                         Commit(consumer, result);
-                        failures = 0;
+                        consumeFailures = 0;
+                        attempts.Remove(result.TopicPartition);
                         break;
                 }
             }
@@ -254,7 +308,7 @@ public abstract class KafkaConsumerService : BackgroundService
         }
     }
 
-    private void Commit(IConsumer<string, string> consumer, ConsumeResult<string, string> result)
+    private void Commit(IKafkaConsumerClient consumer, ConsumeResult<string, string> result)
     {
         try
         {
@@ -266,15 +320,15 @@ public abstract class KafkaConsumerService : BackgroundService
             // which idempotent handlers tolerate (at-least-once contract above).
             _logger.LogWarning(
                 ex, "Kafka commit failed topic={Topic} offset={Offset}. May redeliver.",
-                result.Topic, result.Offset);
+                result.Topic, result.Offset.Value);
         }
     }
 
-    private static async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
+    private async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
     {
         try
         {
-            await Task.Delay(delay, ct);
+            await _delay(delay, ct);
             return true;
         }
         catch (OperationCanceledException)
@@ -288,5 +342,32 @@ public abstract class KafkaConsumerService : BackgroundService
     {
         var shift = Math.Clamp(failures - 1, 0, 5);
         return TimeSpan.FromSeconds(Math.Min(1 << shift, 30));
+    }
+}
+
+/// <summary>Retry-or-stop decision for one message whose handler asked for a retry or threw.</summary>
+/// <param name="Retry">True to seek back and redeliver; false to stop the partition.</param>
+/// <param name="Delay">Backoff before redelivery (zero when stopping).</param>
+internal readonly record struct RetryDecision(bool Retry, TimeSpan Delay);
+
+/// <summary>Pure retry budget logic for the consume loop.</summary>
+internal static class RetryPolicy
+{
+    /// <summary>Handler invocations allowed for one message (first try included) before the partition is stopped.</summary>
+    internal const int MaxAttempts = 5;
+
+    /// <summary>
+    /// Decides what to do after the <paramref name="attempt"/>-th failed handler invocation
+    /// of one message. Attempts 1..MaxAttempts-1 retry after <see cref="KafkaConsumerService.RetryDelay"/>;
+    /// the last failed attempt stops the partition.
+    /// </summary>
+    /// <param name="attempt">1-based count of failed invocations for this offset.</param>
+    /// <returns>Retry decision and backoff.</returns>
+    internal static RetryDecision Decide(int attempt)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(attempt, 1);
+        return attempt < MaxAttempts
+            ? new RetryDecision(true, KafkaConsumerService.RetryDelay(attempt))
+            : new RetryDecision(false, TimeSpan.Zero);
     }
 }

@@ -168,6 +168,18 @@ public class EnvelopeTests
         Assert.Null(parsed);
     }
 
+    [Fact]
+    public void TryParse_NullOrBlankValue_ReturnsFalseWithoutThrowing()
+    {
+        // Kafka tombstones carry a null value; they must be poison (Skip), not a handler exception.
+        Assert.False(ExposedConsumer.Parse<JobCreatedEvent>(null!, out var fromNull));
+        Assert.False(ExposedConsumer.Parse<JobCreatedEvent>("", out var fromEmpty));
+        Assert.False(ExposedConsumer.Parse<JobCreatedEvent>("   ", out var fromBlank));
+        Assert.Null(fromNull);
+        Assert.Null(fromEmpty);
+        Assert.Null(fromBlank);
+    }
+
     private sealed class ExposedConsumer : KafkaConsumerService
     {
         public ExposedConsumer()

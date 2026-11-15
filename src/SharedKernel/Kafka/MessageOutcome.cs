@@ -16,6 +16,9 @@ public enum MessageOutcome
     /// </summary>
     Skip = 1,
 
-    /// <summary>Transient failure (DB/ES/SMTP down): do not commit, redeliver after backoff.</summary>
+    /// <summary>
+    /// Transient failure (DB/ES/SMTP down): seek back and redeliver the same message after
+    /// backoff. After the bounded retry budget the partition is stopped, uncommitted.
+    /// </summary>
     Retry = 2,
 }
