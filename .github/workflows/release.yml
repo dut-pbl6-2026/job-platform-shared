@@ -1,0 +1,65 @@
+name: release
+
+# Publishes JobPlatform.SharedKernel to the organisation's GitHub Packages
+# NuGet feed. Runs only for tags such as v0.4.0 (see AGENTS.md "Release").
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.3.1
+      - uses: actions/setup-dotnet@v4.3.1
+        with: { dotnet-version: '10.0.100' }
+      - name: Check tag matches csproj Version and CHANGELOG
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          csproj_version="$(dotnet msbuild src/SharedKernel/SharedKernel.csproj -nologo -getProperty:Version)"
+          if [ "$tag" != "$csproj_version" ]; then
+            echo "::error::Tag v$tag does not match <Version>$csproj_version</Version> in src/SharedKernel/SharedKernel.csproj. Bump the version in a PR first, then tag that commit."
+            exit 1
+          fi
+          if ! grep -qF "## [$tag]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no entry for [$tag]. Add it before tagging."
+            exit 1
+          fi
+      - run: dotnet build SharedKernel.sln --warnaserror
+      - run: dotnet test SharedKernel.sln --no-build
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4.3.1
+      - uses: actions/setup-dotnet@v4.3.1
+        with: { dotnet-version: '10.0.100' }
+      - run: dotnet pack src/SharedKernel/SharedKernel.csproj -c Release -o ./artifacts
+      - name: Push to GitHub Packages (no overwrite)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          # Deliberately no --skip-duplicate: GitHub Packages never overwrites a
+          # version, so a re-push of an existing version must fail loudly.
+          output="$(dotnet nuget push ./artifacts/*.nupkg \
+            --source https://nuget.pkg.github.com/dut-pbl6-2026/index.json \
+            --api-key "$GITHUB_TOKEN" 2>&1)"
+          status=$?
+          echo "$output"
+          if [ "$status" -ne 0 ]; then
+            if echo "$output" | grep -qiE '409|conflict|already exists'; then
+              echo "::error::This version is already on the GitHub Packages feed. The feed does not overwrite published versions, so the release needs a new version: bump <Version>, add a CHANGELOG entry, and tag the new version."
+            fi
+            exit "$status"
+          fi

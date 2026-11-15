@@ -90,13 +90,39 @@ Kafka__DeadLetterEnabled=true         # default true
 Kafka__DeadLetterTopicSuffix=.dlq     # default .dlq
 ```
 
+## Release
+
+Released versions are published to GitHub Packages by `.github/workflows/release.yml` when a `vX.Y.Z` tag is pushed:
+
+1. Merge a PR to `main` that bumps `<Version>` in `src/SharedKernel/SharedKernel.csproj` and adds a `## [X.Y.Z]` entry to `CHANGELOG.md`.
+2. `git tag vX.Y.Z` on that commit and `git push origin vX.Y.Z`.
+3. The workflow checks that the tag equals `<Version>` and that CHANGELOG has the entry, then runs build, tests and `dotnet pack`, and pushes the package with the built-in `GITHUB_TOKEN`.
+
+GitHub Packages never overwrites a version. If `X.Y.Z` is already on the feed, the publish job fails with a message: the release needs a new version.
+
 ## Consume
+
+Services take the package from GitHub Packages (`https://nuget.pkg.github.com/dut-pbl6-2026/index.json`). Add the source once per machine or CI runner, with a personal access token that has `read:packages` (never commit the token):
+
+```bash
+dotnet nuget add source https://nuget.pkg.github.com/dut-pbl6-2026/index.json \
+  --name github-dut-pbl6-2026 \
+  --username <github-username> \
+  --password <token-with-read:packages> \
+  --store-password-in-clear-text
+```
+
+In CI, pass the token from a secret instead of a literal. Then reference `JobPlatform.SharedKernel` with `PackageReference` as usual.
+
+Local development against unreleased changes still uses the `local-feed` flow below.
+
 
 `JobPlatform.SharedKernel 0.2.0` via `local-feed` + `nuget.config` in `job-platform-auth-svc` (`PackageReference` not `ProjectReference`). Services still on `0.1.0` keep working — bump to `0.2.0` only when adopting Kafka events (`PBL6-5`). For local dev:
 
 ```bash
 mise run pack
 cp artifacts/*.nupkg ../job-platform-auth-svc/local-feed/
+```
 
 When bumping SharedKernel, update `<Version>` in
 `src/SharedKernel/SharedKernel.csproj`, then run:
