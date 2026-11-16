@@ -17,13 +17,13 @@ Agent uses `mise exec -- dotnet ...` / `mise exec -- infisical ...` due to non-i
 
 ## Scope
 
-`PBL6-11` shared library — `PackageId JobPlatform.SharedKernel 0.3.1` (`net10.0`) for all svcs+gateway. Owner all TMs. MUST infra dependency per `3.13`. `0.2.0` adds Kafka event contracts + plumbing (`PBL6-5`, `src/SharedKernel/{Events,Kafka}`); consumers on `0.1.0` bump `PackageReference` when they adopt events. `0.3.0` adds optional `CreatedAt` to `JobCreatedEvent`/`JobUpdatedEvent` (additive, null from older producers): job-svc and search-svc use it; other services can stay on `0.2.0`.
+`PBL6-11` shared library — `PackageId JobPlatform.SharedKernel 0.4.0` (`net10.0`) for all svcs+gateway. Owner all TMs. MUST infra dependency per `3.13`. `0.2.0` adds Kafka event contracts + plumbing (`PBL6-5`, `src/SharedKernel/{Events,Kafka}`); consumers on `0.1.0` bump `PackageReference` when they adopt events. `0.3.0` adds optional `CreatedAt` to `JobCreatedEvent`/`JobUpdatedEvent` (additive, null from older producers): job-svc and search-svc use it. `0.4.0` is breaking: `JwtOptions.Secret` is removed, because tokens are RS256 and every consumer reads the public keys from auth-svc's JWKS.
 
 ## Architecture (SRS 8.7 multirepo)
 
-- **Consumers:** `auth-svc` + `job-svc` + `search-svc` + `app-svc` + `profile-svc` + `notif-svc` + `gateway` via `PackageReference` only (never `ProjectReference` per `master-plan.md:132`), `nuget.config` `local-feed` in `auth-svc` for local dev; released versions come from GitHub Packages (see Release).
+- **Consumers:** `auth-svc` + `job-svc` + `search-svc` + `app-svc` + `profile-svc` + `notif-svc` + `gateway` via `PackageReference` only (never `ProjectReference` per `master-plan.md:132`). Released versions come from GitHub Packages; there is no committed `local-feed/` directory.
 - **Contracts:** DDD building blocks + Kafka event contracts/plumbing (`PBL6-5`) — no other infra. Event schema dual-read for `job.created|updated|deleted|application.submitted|status_changed` (`8-system-architecture.md:8.5`): `Events/{JobEvents,ApplicationEvents,EventEnvelope}.cs` (payloads + envelope, no PII per `SEC-05`), `Kafka/{KafkaOptions,KafkaProducerService,KafkaConsumerService}.cs` (transport only; topic/group stay per-service).
-- **Versioning:** SemVer `0.1.0` (`<Version>` in `SharedKernel.csproj`), breaking change = major bump + `Pact` contract test block in service CI (`3-must-have-fr.md:3.13`), Dependabot + `repository_dispatch` propagation.
+- **Versioning:** SemVer (`<Version>` in `SharedKernel.csproj`, currently `0.4.0`), breaking change = major bump + `Pact` contract test block in service CI (`3-must-have-fr.md:3.13`), Dependabot + `repository_dispatch` propagation.
 
 ## DDD building blocks (2026 best practice, NFR `MAINT-01`)
 
@@ -49,9 +49,8 @@ JwtOptions      : SectionName="Jwt", Issuer=Audience="job-platform", ExpiresMinu
 ```bash
 mise trust && mise install
 mise run build && mise run format
-mise run pack   # → ./artifacts/JobPlatform.SharedKernel.0.2.0.nupkg
+mise run pack   # → ./artifacts/JobPlatform.SharedKernel.0.4.0.nupkg
 mise run verify # 1 nupkg
-cp artifacts/*.nupkg ../job-platform-auth-svc/local-feed/
 ```
 
 `feature/* → main` (e.g., `feature/PBL6-12-shared-kernel`), PR must update `CHANGELOG` on version bump.

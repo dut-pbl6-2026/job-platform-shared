@@ -1,6 +1,6 @@
 # job-platform-shared
 
-.NET Class Library SharedKernel — **Vietnam Job Platform** (`pbl6`) under [`dut-pbl6-2026`](https://github.com/dut-pbl6-2026). `PackageId JobPlatform.SharedKernel 0.3.1`.
+.NET Class Library SharedKernel — **Vietnam Job Platform** (`pbl6`) under [`dut-pbl6-2026`](https://github.com/dut-pbl6-2026). `PackageId JobPlatform.SharedKernel 0.4.0`.
 
 ## Prerequisites
 
@@ -114,34 +114,9 @@ dotnet nuget add source https://nuget.pkg.github.com/dut-pbl6-2026/index.json \
 
 In CI, pass the token from a secret instead of a literal. Then reference `JobPlatform.SharedKernel` with `PackageReference` as usual.
 
-Local development against unreleased changes still uses the `local-feed` flow below.
+Authentication is required even though the package is public: an anonymous request to the feed returns `401`, so a clean restore or Docker build without the token fails with `NU1301` (`401`). In Actions the built-in `GITHUB_TOKEN` already has `read:packages` for same-organization packages. The .NET Dockerfiles mount it as the BuildKit secret `nuget_token`; `job-platform-infra/docker-compose.yml` supplies that secret from the `GITHUB_TOKEN` environment variable.
 
-
-`JobPlatform.SharedKernel 0.2.0` via `local-feed` + `nuget.config` in `job-platform-auth-svc` (`PackageReference` not `ProjectReference`). Services still on `0.1.0` keep working — bump to `0.2.0` only when adopting Kafka events (`PBL6-5`). For local dev:
-
-```bash
-mise run pack
-cp artifacts/*.nupkg ../job-platform-auth-svc/local-feed/
-```
-
-When bumping SharedKernel, update `<Version>` in
-`src/SharedKernel/SharedKernel.csproj`, then run:
-
-```powershell
-mise run verify
-mise run syncLocalFeeds
-```
-
-`syncLocalFeeds` packs SharedKernel, copies the package to the local feeds
-of auth-svc and gateway, and updates their exact PackageReference versions
-in Auth.Core, Auth.Infrastructure, and Gateway.Api.
-
-Requires sibling clones of shared, auth-svc, and gateway, plus PowerShell
-and mise.
-
-After synchronization, run restore, build, and tests in both consumers.
-Commit the new packages and updated project files in their respective repos.
-```
+Consumers pin the released version (currently `0.4.0`); there is no committed `local-feed/` directory.
 
 ## Troubleshooting
 
